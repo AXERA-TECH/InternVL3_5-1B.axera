@@ -185,10 +185,10 @@ class InternVLGradioDemo:
         if slice_len > 0:
             mask[:, :, :seq_len] = 0
 
-        generated_text = self.tokenizer.decode(token_ids[-1], skip_special_tokens=True)
         ttft_ms: Optional[float] = None
         decode_tokens = 0
         decode_elapsed_ms: float = 0.0
+        generated_text = ""
         yield generated_text, ttft_ms, None, None, False
 
         for step_idx in range(self.infer_manager.max_seq_len):
@@ -222,8 +222,9 @@ class InternVLGradioDemo:
                 break
 
             token_ids.append(next_token)
-            decoded_piece = self.tokenizer.decode(next_token, skip_special_tokens=True)
-            generated_text += decoded_piece
+            # 使用完整 token 列表解码，避免多字节 UTF-8 字符被截断显示为乱码
+            # 只解码新生成的 tokens（从 seq_len 开始）
+            generated_text = self.tokenizer.decode(token_ids[seq_len:], skip_special_tokens=True)
 
             if ttft_ms is None:
                 ttft_ms = (time.time() - t_start) * 1000
@@ -269,7 +270,45 @@ class InternVLGradioDemo:
 
     @staticmethod
     def build_ui(demo: "InternVLGradioDemo", server_name: str = "0.0.0.0", server_port: int = 7860, share: bool = False):
-        with gr.Blocks(title="InternVL3-5-1B AX Gradio Demo", theme=gr.themes.Soft()) as iface:
+        # 自定义 JavaScript: Enter 发送, Shift+Enter 换行
+        custom_js = """
+        function() {
+            // 等待 DOM 加载完成后绑定事件
+            setTimeout(() => {
+                const textareas = document.querySelectorAll('#user-input textarea');
+                textareas.forEach(textarea => {
+                    // 移除可能存在的旧监听器
+                    textarea.removeEventListener('keydown', textarea._customKeyHandler);
+
+                    textarea._customKeyHandler = function(e) {
+                        if (e.key === 'Enter') {
+                            if (e.shiftKey) {
+                                // Shift+Enter: 插入换行符
+                                e.preventDefault();
+                                const start = this.selectionStart;
+                                const end = this.selectionEnd;
+                                const value = this.value;
+                                this.value = value.substring(0, start) + '\\n' + value.substring(end);
+                                this.selectionStart = this.selectionEnd = start + 1;
+                                // 触发 input 事件让 Gradio 感知变化
+                                this.dispatchEvent(new Event('input', { bubbles: true }));
+                            } else {
+                                // Enter: 发送消息
+                                e.preventDefault();
+                                const sendBtn = document.querySelector('#send-btn');
+                                if (sendBtn) {
+                                    sendBtn.click();
+                                }
+                            }
+                        }
+                    };
+                    textarea.addEventListener('keydown', textarea._customKeyHandler);
+                });
+            }, 500);
+        }
+        """
+
+        with gr.Blocks(title="InternVL3-5-1B AX Gradio Demo", theme=gr.themes.Soft(), js=custom_js) as iface:
             gr.HTML("""<style>
             #image-pane img {object-fit: contain; max-height: 380px;}
             #chat-wrap {position: relative;}
@@ -292,9 +331,10 @@ class InternVLGradioDemo:
                             scale=7,
                             max_lines=5,
                             show_label=False,
+                            elem_id="user-input",
                         )
                         with gr.Column(scale=1, min_width=100):
-                            send_btn = gr.Button("发送", variant="primary", size="sm")
+                            send_btn = gr.Button("发送", variant="primary", size="sm", elem_id="send-btn")
                             clear_btn = gr.Button("清空对话", variant="secondary", size="sm")
 
                 # 右侧：图像上传和信息提示
@@ -319,13 +359,7 @@ class InternVLGradioDemo:
                 show_progress=False,
                 queue=True,
             )
-            user_input.submit(
-                fn=demo.chat,
-                inputs=[user_input, image_input],
-                outputs=[chatbot, user_input, image_input, metrics_md, send_btn],
-                show_progress=False,
-                queue=True,
-            )
+            # 移除 user_input.submit，由自定义 JS 处理 Enter 发送，Shift+Enter 换行
             clear_btn.click(fn=_clear, inputs=None, outputs=[chatbot, user_input, image_input, metrics_md, send_btn])
 
         iface.queue().launch(server_name=server_name, server_port=server_port, share=share)
