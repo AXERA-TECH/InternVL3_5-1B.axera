@@ -1,6 +1,7 @@
 import argparse
 import os
-from typing import Any, Dict, List, Optional, Generator
+import time
+from typing import Any, Dict, List, Optional, Generator, Tuple
 
 import gradio as gr
 import numpy as np
@@ -157,7 +158,7 @@ class InternVLGradioDemo:
         )
 
     def _stream_generate(self, prompt: str, vit_features: List[np.ndarray]):
-        """流式生成，逐 token 产出累积文本，供 Gradio generator 使用。"""
+        """流式生成，逐 token 产出累积文本与计时信息 (TTFT 与平均 decode ms/token)。"""
         # reset kv cache per request
         for k_cache in self.infer_manager.k_caches:
             k_cache.fill(0)
@@ -174,6 +175,7 @@ class InternVLGradioDemo:
             eos_token_id = self.cfg.eos_token_id
 
         slice_len = 128
+        t_start = time.time()
         token_ids = self.infer_manager.prefill(self.tokenizer, token_ids, prefill_data, slice_len=slice_len)
 
         # copy decode逻辑，实现手动流式输出
@@ -184,7 +186,10 @@ class InternVLGradioDemo:
             mask[:, :, :seq_len] = 0
 
         generated_text = self.tokenizer.decode(token_ids[-1], skip_special_tokens=True)
-        yield generated_text
+        ttft_ms: Optional[float] = None
+        decode_tokens = 0
+        decode_elapsed_ms: float = 0.0
+        yield generated_text, ttft_ms, None, None, False
 
         for step_idx in range(self.infer_manager.max_seq_len):
             if slice_len > 0 and step_idx < seq_len:
@@ -210,22 +215,37 @@ class InternVLGradioDemo:
             post_out = self.infer_manager.post_process_session.run(None, {"input": data})[0]
             next_token, possible_tokens, possible_probs = self.infer_manager.post_process(post_out, temperature=0.7)
             if eos_token_id is not None and next_token in eos_token_id:
+                ttft_ms = ttft_ms or (time.time() - t_start) * 1000
                 break
             if next_token == self.tokenizer.eos_token_id:
+                ttft_ms = ttft_ms or (time.time() - t_start) * 1000
                 break
+
             token_ids.append(next_token)
             decoded_piece = self.tokenizer.decode(next_token, skip_special_tokens=True)
             generated_text += decoded_piece
-            yield generated_text
+
+            if ttft_ms is None:
+                ttft_ms = (time.time() - t_start) * 1000
+            else:
+                decode_tokens += 1
+                decode_elapsed_ms = (time.time() - t_start) * 1000 - ttft_ms
+
+            avg_decode = (decode_elapsed_ms / decode_tokens) if decode_tokens > 0 else None
+            yield generated_text, ttft_ms, avg_decode, decode_tokens, False
+
+        total_ms = (time.time() - t_start) * 1000
+        avg_decode = (decode_elapsed_ms / decode_tokens) if decode_tokens > 0 else None
+        yield generated_text, ttft_ms, avg_decode, decode_tokens, True
 
     def chat(self, user_input: str, image: Optional[Image.Image]) -> Generator:
         user_text = (user_input or "").strip()
         if not user_text and image is None:
-            yield [], gr.update(), gr.update()
+            yield [], gr.update(), gr.update(), gr.update(), gr.update()
             return
 
-        # 先展示占位，保持图片不清空
-        yield [(user_text, "处理中…")], gr.update(value=""), gr.update()
+        # 先展示占位，保持图片不清空；同时占位速度信息
+        yield [(user_text, "处理中…")], gr.update(value=""), gr.update(), gr.update(value="<div style='text-align: right; font-size: 13px; font-weight: 600; color: #111827; font-family: monospace; background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%); border: 1px solid #e5e7eb; padding: 10px 16px; border-radius: 999px; box-shadow: 0 10px 30px rgba(17, 24, 39, 0.08); display: inline-block;'>TTFT -- ms&nbsp;&nbsp;|&nbsp;&nbsp;Decode -- ms/token&nbsp;&nbsp;|&nbsp;&nbsp;Tokens --</div>"), gr.update(interactive=False)
 
         vit_outputs = []
         if image is not None:
@@ -236,21 +256,33 @@ class InternVLGradioDemo:
         prompt = self._build_single_turn_prompt(user_text, vit_outputs)
 
         chatbot_history = [(user_text, "")]  # 将在流式过程中填充
-        for partial in self._stream_generate(prompt, vit_outputs):
+        for partial, ttft_ms, avg_decode_ms, decode_tokens, finished in self._stream_generate(prompt, vit_outputs):
             chatbot_history[-1] = (user_text, partial)
-            yield chatbot_history, gr.update(value=""), gr.update()
+            ttft_disp = f"{ttft_ms:.0f}" if ttft_ms is not None else "--"
+            decode_disp = f"{avg_decode_ms:.1f}" if avg_decode_ms is not None else "--"
+            tok_disp = f"{decode_tokens}" if decode_tokens is not None else "--"
+            metrics_text = f"<div style='text-align: right; font-size: 13px; font-weight: 600; color: #111827; font-family: monospace; background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%); border: 1px solid #e5e7eb; padding: 10px 16px; border-radius: 999px; box-shadow: 0 10px 30px rgba(17, 24, 39, 0.08); display: inline-block;'>TTFT {ttft_disp} ms&nbsp;&nbsp;|&nbsp;&nbsp;Decode {decode_disp} ms/token&nbsp;&nbsp;|&nbsp;&nbsp;Tokens {tok_disp}</div>"
+            if finished:
+                yield chatbot_history, gr.update(value=""), gr.update(), gr.update(value=metrics_text), gr.update(interactive=True)
+            else:
+                yield chatbot_history, gr.update(value=""), gr.update(), gr.update(value=metrics_text), gr.update(interactive=False)
 
     @staticmethod
     def build_ui(demo: "InternVLGradioDemo", server_name: str = "0.0.0.0", server_port: int = 7860, share: bool = False):
         with gr.Blocks(title="InternVL3-5-1B AX Gradio Demo", theme=gr.themes.Soft()) as iface:
             gr.HTML("""<style>
             #image-pane img {object-fit: contain; max-height: 320px;}
+            #chat-wrap {position: relative;}
+            #metrics-display {position: absolute; right: 12px; bottom: 12px; z-index: 5; pointer-events: none; text-align: right;}
+            #metrics-display > div {display: inline-block;}
             </style>""")
             gr.Markdown("""### InternVL3-5-1B 图文对话演示\n上传一张图片 (可选)，输入问题，获取中文回答。""")
 
             with gr.Row():
                 with gr.Column(scale=5):
-                    chatbot = gr.Chatbot(height=420, label="对话")
+                    with gr.Group(elem_id="chat-wrap"):
+                        chatbot = gr.Chatbot(height=420, label="对话")
+                        metrics_md = gr.Markdown("<div style='text-align: right; font-size: 13px; font-weight: 600; color: #111827; font-family: monospace; background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%); border: 1px solid #e5e7eb; padding: 10px 16px; border-radius: 999px; box-shadow: 0 10px 30px rgba(17, 24, 39, 0.08); display: inline-block;'>TTFT -- ms&nbsp;&nbsp;|&nbsp;&nbsp;Decode -- ms/token&nbsp;&nbsp;|&nbsp;&nbsp;Tokens --</div>", elem_id="metrics-display")
                 with gr.Column(scale=3):
                     image_input = gr.Image(
                         type="pil",
@@ -275,23 +307,23 @@ class InternVLGradioDemo:
                         clear_btn = gr.Button("清空对话", variant="secondary")
 
             def _clear():
-                return [], gr.update(value=""), gr.update()
+                return [], gr.update(value=""), gr.update(), gr.update(value="<div style='text-align: right; font-size: 13px; font-weight: 600; color: #111827; font-family: monospace; background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%); border: 1px solid #e5e7eb; padding: 10px 16px; border-radius: 999px; box-shadow: 0 10px 30px rgba(17, 24, 39, 0.08); display: inline-block;'>TTFT -- ms&nbsp;&nbsp;|&nbsp;&nbsp;Decode -- ms/token&nbsp;&nbsp;|&nbsp;&nbsp;Tokens --</div>"), gr.update(interactive=True)
 
             send_btn.click(
                 fn=demo.chat,
                 inputs=[user_input, image_input],
-                outputs=[chatbot, user_input, image_input],
+                outputs=[chatbot, user_input, image_input, metrics_md, send_btn],
                 show_progress=False,
                 queue=True,
             )
             user_input.submit(
                 fn=demo.chat,
                 inputs=[user_input, image_input],
-                outputs=[chatbot, user_input, image_input],
+                outputs=[chatbot, user_input, image_input, metrics_md, send_btn],
                 show_progress=False,
                 queue=True,
             )
-            clear_btn.click(fn=_clear, inputs=None, outputs=[chatbot, user_input, image_input])
+            clear_btn.click(fn=_clear, inputs=None, outputs=[chatbot, user_input, image_input, metrics_md, send_btn])
 
         iface.queue().launch(server_name=server_name, server_port=server_port, share=share)
 
