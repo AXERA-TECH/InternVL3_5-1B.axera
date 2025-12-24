@@ -1,0 +1,15 @@
+__pycache__
+*.tar
+build-output/
+*.onnx
+*.pth
+*.pkl
+*.bin
+*.npy
+*.axmodel
+*_axmodel/
+*.safetensors
+compiled*
+*tmp/
+tmp*
+InternVL3_5-1B*
