@@ -245,7 +245,7 @@ class InternVLGradioDemo:
             return
 
         # 先展示占位，保持图片不清空；同时占位速度信息
-        yield [(user_text, "处理中…")], gr.update(value=""), gr.update(), gr.update(value="<div style='text-align: right; font-size: 13px; font-weight: 600; color: #111827; font-family: monospace; background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%); border: 1px solid #e5e7eb; padding: 10px 16px; border-radius: 999px; box-shadow: 0 10px 30px rgba(17, 24, 39, 0.08); display: inline-block;'>TTFT -- ms&nbsp;&nbsp;|&nbsp;&nbsp;Decode -- ms/token&nbsp;&nbsp;|&nbsp;&nbsp;Tokens --</div>"), gr.update(interactive=False)
+        yield [(user_text, "处理中…")], gr.update(value=""), gr.update(), gr.update(value="<div style='text-align: right; font-size: 13px; color: #6b7280; font-family: monospace;'>TTFT -- ms&nbsp;&nbsp;|&nbsp;&nbsp;Decode -- ms/token&nbsp;&nbsp;|&nbsp;&nbsp;Tokens --</div>"), gr.update(interactive=False)
 
         vit_outputs = []
         if image is not None:
@@ -261,7 +261,7 @@ class InternVLGradioDemo:
             ttft_disp = f"{ttft_ms:.0f}" if ttft_ms is not None else "--"
             decode_disp = f"{avg_decode_ms:.1f}" if avg_decode_ms is not None else "--"
             tok_disp = f"{decode_tokens}" if decode_tokens is not None else "--"
-            metrics_text = f"<div style='text-align: right; font-size: 13px; font-weight: 600; color: #111827; font-family: monospace; background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%); border: 1px solid #e5e7eb; padding: 10px 16px; border-radius: 999px; box-shadow: 0 10px 30px rgba(17, 24, 39, 0.08); display: inline-block;'>TTFT {ttft_disp} ms&nbsp;&nbsp;|&nbsp;&nbsp;Decode {decode_disp} ms/token&nbsp;&nbsp;|&nbsp;&nbsp;Tokens {tok_disp}</div>"
+            metrics_text = f"<div style='text-align: right; font-size: 13px; color: #6b7280; font-family: monospace;'>TTFT {ttft_disp} ms&nbsp;&nbsp;|&nbsp;&nbsp;Decode {decode_disp} ms/token&nbsp;&nbsp;|&nbsp;&nbsp;Tokens {tok_disp}</div>"
             if finished:
                 yield chatbot_history, gr.update(value=""), gr.update(), gr.update(value=metrics_text), gr.update(interactive=True)
             else:
@@ -271,7 +271,7 @@ class InternVLGradioDemo:
     def build_ui(demo: "InternVLGradioDemo", server_name: str = "0.0.0.0", server_port: int = 7860, share: bool = False):
         with gr.Blocks(title="InternVL3-5-1B AX Gradio Demo", theme=gr.themes.Soft()) as iface:
             gr.HTML("""<style>
-            #image-pane img {object-fit: contain; max-height: 320px;}
+            #image-pane img {object-fit: contain; max-height: 380px;}
             #chat-wrap {position: relative;}
             #metrics-display {position: absolute; right: 12px; bottom: 12px; z-index: 5; pointer-events: none; text-align: right;}
             #metrics-display > div {display: inline-block;}
@@ -279,35 +279,38 @@ class InternVLGradioDemo:
             gr.Markdown("""### InternVL3-5-1B 图文对话演示\n上传一张图片 (可选)，输入问题，获取中文回答。""")
 
             with gr.Row():
+                # 左侧：对话框和输入区域
                 with gr.Column(scale=5):
                     with gr.Group(elem_id="chat-wrap"):
-                        chatbot = gr.Chatbot(height=420, label="对话")
-                        metrics_md = gr.Markdown("<div style='text-align: right; font-size: 13px; font-weight: 600; color: #111827; font-family: monospace; background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%); border: 1px solid #e5e7eb; padding: 10px 16px; border-radius: 999px; box-shadow: 0 10px 30px rgba(17, 24, 39, 0.08); display: inline-block;'>TTFT -- ms&nbsp;&nbsp;|&nbsp;&nbsp;Decode -- ms/token&nbsp;&nbsp;|&nbsp;&nbsp;Tokens --</div>", elem_id="metrics-display")
+                        chatbot = gr.Chatbot(height=500, label="对话")
+                        metrics_md = gr.Markdown("<div style='text-align: right; font-size: 13px; color: #6b7280; font-family: monospace;'>TTFT -- ms&nbsp;&nbsp;|&nbsp;&nbsp;Decode -- ms/token&nbsp;&nbsp;|&nbsp;&nbsp;Tokens --</div>", elem_id="metrics-display")
+
+                    with gr.Row():
+                        user_input = gr.Textbox(
+                            placeholder="按 Enter 发送，Shift+Enter 换行",
+                            lines=2,
+                            scale=7,
+                            max_lines=5,
+                            show_label=False,
+                        )
+                        with gr.Column(scale=1, min_width=100):
+                            send_btn = gr.Button("发送", variant="primary", size="sm")
+                            clear_btn = gr.Button("清空对话", variant="secondary", size="sm")
+
+                # 右侧：图像上传和信息提示
                 with gr.Column(scale=3):
                     image_input = gr.Image(
                         type="pil",
                         label="上传图片 (可选)",
-                        height=320,
+                        height=380,
                         image_mode="RGB",
                         show_download_button=False,
                         elem_id="image-pane",
                     )
                     gr.Markdown("""- 支持单张图像理解\n- 仅当前问题与回答，不保留历史\n- 处理时间取决于硬件，请耐心等待""")
 
-            with gr.Row():
-                with gr.Column(scale=9):
-                    user_input = gr.Textbox(
-                        label="你的问题",
-                        placeholder="按 Enter 发送，或点击发送按钮",
-                        lines=1,
-                    )
-                with gr.Column(scale=3):
-                    with gr.Row():
-                        send_btn = gr.Button("发送", variant="primary")
-                        clear_btn = gr.Button("清空对话", variant="secondary")
-
             def _clear():
-                return [], gr.update(value=""), gr.update(), gr.update(value="<div style='text-align: right; font-size: 13px; font-weight: 600; color: #111827; font-family: monospace; background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%); border: 1px solid #e5e7eb; padding: 10px 16px; border-radius: 999px; box-shadow: 0 10px 30px rgba(17, 24, 39, 0.08); display: inline-block;'>TTFT -- ms&nbsp;&nbsp;|&nbsp;&nbsp;Decode -- ms/token&nbsp;&nbsp;|&nbsp;&nbsp;Tokens --</div>"), gr.update(interactive=True)
+                return [], gr.update(value=""), gr.update(), gr.update(value="<div style='text-align: right; font-size: 13px; color: #6b7280; font-family: monospace;'>TTFT -- ms&nbsp;&nbsp;|&nbsp;&nbsp;Decode -- ms/token&nbsp;&nbsp;|&nbsp;&nbsp;Tokens --</div>"), gr.update(interactive=True)
 
             send_btn.click(
                 fn=demo.chat,
