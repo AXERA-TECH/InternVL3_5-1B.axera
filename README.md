@@ -1,6 +1,6 @@
 # InternVL3_5-1B.axera
 
-> InternVL3_5-1B DEMO on Axera.
+> InternVL3_5-1B DEMO on Axera NPU.
 
 - 目前支持 `Python` 语言, `C++` 代码在开发中.
 - 预编译模型可以从 [HuggingFace]() 下载.
