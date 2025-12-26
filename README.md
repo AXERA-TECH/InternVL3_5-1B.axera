@@ -3,7 +3,7 @@
 > InternVL3_5-1B DEMO on Axera NPU.
 
 - 目前支持 `Python` 语言, `C++` 代码在开发中.
-- 预编译模型可以从 [HuggingFace]() 下载.
+- 预编译模型可以从 [HuggingFace](https://huggingface.co/AXERA-TECH/InternVL3_5-1B) 下载.
 - 如需自行导出编译 `VIT` 模型请参考 [模型转换](/model_convert/README.md).
 
 ## 支持平台
